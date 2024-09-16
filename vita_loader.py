@@ -529,5 +529,3 @@ def register_plugin():
     )
 
 register_plugin()
-
-
