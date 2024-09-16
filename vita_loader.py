@@ -450,8 +450,20 @@ class VitaElf():
     def add_function_symbol(self, bv: BinaryView, addr: int, name: str):
         if not bv.get_function_at(addr):
             bv.create_user_function(addr)
-        symbol = Symbol(SymbolType.FunctionSymbol, addr, name)
-        bv.define_user_symbol(symbol)
+        
+        #Setting imports to void and tell binary ninja to resolve variables.
+        func_type = Type.function(Type.void(), [], variable_arguments=True)
+        
+        #Get the function pointer
+        func = bv.get_function_at(addr)
+        
+        #set type to void with variables
+        func.function_type = func_type
+        
+        symbol = Symbol(SymbolType.ImportedFunctionSymbol, addr, name)
+        
+        #define as import, will need to add check for export but it appears to just be a color coding thing for our purposes.
+        bv.define_imported_function(symbol, func)
 
     def add_data_symbol(self, bv: BinaryView, addr: int, name: str):
         symbol = Symbol(SymbolType.DataSymbol, addr, name)
@@ -517,4 +529,5 @@ def register_plugin():
     )
 
 register_plugin()
+
 
