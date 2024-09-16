@@ -7,28 +7,30 @@ from binaryninja import (
     SymbolType,
     Type,
     get_open_filename_input,
+    execute_on_main_thread
 )
+import threading
 import struct
 import yaml
 import os
-
+import binaryninja
 class VitaElf():
 
     def __init__(self, bv: BinaryView):
         self.raw = bv.parent_view
-        #self.bv = bv
+        self.bv = bv
         self.nid_database = None
         self.struct_endianness = "<"  # Little endian for struct unpacking
 
 
 
-    def load_vita_symbols(self, bv: BinaryView):
+    def load_vita_symbols(self):
         try:
             self.parse_elf()
             self.parse_sce_module_info()
             self.load_nid_database()
-            self.process_exports(bv)
-            self.process_imports(bv)
+            self.process_exports(self.bv)
+            self.process_imports(self.bv)
 
             log_info("Symbols added successfully.")
 
@@ -211,7 +213,6 @@ class VitaElf():
     def process_exports(self, bv: BinaryView):
         log_info("Parsing exports")
         ph_offset = self.program_headers[0][1]
-        #exports_offset = self.export_top
         exports_offset = self.export_top + ph_offset
         exports_end = self.export_end + ph_offset
         log_info(f"Export offset start: {hex(exports_offset)}")
@@ -233,8 +234,7 @@ class VitaElf():
             if len(export_data) < export_size:
                 log_error(f"Incomplete export data at 0x{exports_offset:X}")
                 break
-            #BBHHHHH4sIIIIIIIII
-            export_struct = self.struct_endianness + "B1sHHHHHBBBBIIII"
+            export_struct = self.struct_endianness + "B1BHHHHHBBBBIIII"
             if len(export_data) < struct.calcsize(export_struct):
                 log_error(f"Incomplete export structure at 0x{exports_offset:X}")
                 break
@@ -274,10 +274,13 @@ class VitaElf():
                 function_addr = struct.unpack("<I", entry_data)[0]
                 if library_name == "NONAME" and function_nid == 0x935CD196:
                     function_name = "module_start"
+                    function_addr -= 1 #Odd off by one byte causes misalignment on NONAME exports. Example: hex(struct.unpack("I",read(entry_table_addr,4)) = 0x8108675d. The module_start should be located at 0x8108675c in this example.
+                    log_info(f"module_start addr: {function_addr}") #TODO debug
                 else:
                     function_name = self.lookup_nid_function(library_nid, function_nid, library_name)
-                log_info(f"export symbol: {function_name}") #TODO debug
                 self.add_function_symbol(bv, function_addr, function_name)
+                log_info(f"export symbol: {function_name}") #TODO debug
+                #self.add_function_symbol(bv, function_addr, function_name)
 
 
             for i in range(num_vars):
@@ -312,7 +315,7 @@ class VitaElf():
 
 
         while imports_offset < imports_end:
-            log_info(f"imports_offset: {imports_offset}") #TODO debug
+            log_info(f"imports_offset: {hex(imports_offset)}") #TODO debug
 
             import_size_data = self.raw.read(imports_offset, 0x34) #Need to get scemodimport version, hardcoded for now.
             log_info(f"import_size_data: {import_size_data}") #TODO need to actually use this to get size to determine _scelibstub_prx2arm(0x34) or _scelibstub_prx2arm_new(0x24)
@@ -468,13 +471,49 @@ class VitaElf():
             addr += 1
         return s.decode("ascii", errors="ignore")
 
+
+def sweep_before_load(bv):
+    '''
+    We cannot call bv.update_analysis_and_wait() on a UI thread.
+    Until a more clever approach is realized, this will solve two issues:
+    1. Loading the plugin and injecting addresses during the initial linear sweep causes mis-alignment issues.
+    2. There appears to be an issue with binaries using mixed arm & thumb instruction sets, the first Linear Sweep run does okay but misses many functions(typically on the order of a few thousand). The second run does better and the third will find and create all of them, with the caveat that some inline data will be interpreted as instructions, causing a few non-functions to be represented as mis-aligned functions.
+    This function will run linear sweep in a new thread for a max of n times or until no new functions are created.
+'''
+    def n_linearsweep():
+        func_cnt = 0    #function count
+        i = 0           #current sweep iteration
+        n_max = 5      #max linear sweep runs
+
+        while i < n_max:
+            bv.update_analysis_and_wait()           #wait for default analysis
+            bv.add_analysis_option("linearsweep")   #add linearsweep
+            bv.update_analysis_and_wait()           #run linearsweep and wait
+
+            cur_func_cnt = len(list(bv.functions))  #get current function count
+            if cur_func_cnt == func_cnt:
+                log_info(f"No new function created at i: {i}")
+                break
+
+            func_cnt = cur_func_cnt
+            i += 1
+
+        if i >= n_max:
+            log_info("ran {i} linear sweeps, potentially more functions undiscovered")
+
+        #Switch back to main UI event thread and run plugin
+        binaryninja.execute_on_main_thread(lambda: VitaElf(bv).load_vita_symbols())
+
+    #Run linear sweep analysis in new thread.
+    threading.Thread(target=n_linearsweep).start()
+    
 def register_plugin():
     #register plugin after the ARMv7 BinaryView is loaded.
 
     PluginCommand.register(
         "VitaELF: Inject Symbols",
         "Injects resolved NID symbols into the ARMv7 BinaryView.",
-        lambda bv: VitaElf(bv).load_vita_symbols(bv)
+        sweep_before_load
     )
 
 register_plugin()
