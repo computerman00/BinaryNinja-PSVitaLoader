@@ -79,4 +79,4 @@ Cross referencing with the patch in VitaGrafix we can confirm our suspicions:
 
 
 
-“PlayStation” and "PlayStation Vita" are registered trademarks of Sony Computer Entertainment Inc. This tool is **NOT** affiliated with, endorsed by, related to Sony, or derived from confidential materials belonging to Sony.
+“PlayStation” and "PlayStation Vita" are registered trademarks of Sony Computer Entertainment Inc. This tool is **NOT** affiliated with, endorsed by, related to, or derived from confidential materials belonging to Sony Computer Entertainment Inc.
