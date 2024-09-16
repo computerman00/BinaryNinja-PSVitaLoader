@@ -209,46 +209,59 @@ class VitaElf():
             raise Exception(f"Failed to load NID database: {e}")
 
     def process_exports(self, bv: BinaryView):
-        exports_offset = self.export_top
-        if not exports_offset or not self.export_end:
+        log_info("Parsing exports")
+        ph_offset = self.program_headers[0][1]
+        #exports_offset = self.export_top
+        exports_offset = self.export_top + ph_offset
+        exports_end = self.export_end + ph_offset
+        log_info(f"Export offset start: {hex(exports_offset)}")
+        if not exports_offset or not exports_end:
             log_error("Export sections not defined in SceModuleInfo.")
             return
 
 
-        while exports_offset < self.export_end:
-            export_size_data = bv.read(exports_offset, 2) #TODO THIS SHOULD BE raw/bv.pv.read, size is wrong, exports not working atm
-            if len(export_size_data) < 2:
+        while exports_offset < exports_end:
+            #Is there even a point of making export size dynamic? Unless we split out _scelibent_ppu_common of size 0x10, could be useful to leave flexibility for potential future integration of scelibent_psp and other PRX1 variants. 
+            export_size_data = self.raw.read(exports_offset, 0x20) 
+            if len(export_size_data) < 0x20:
                 log_error(f"Incomplete export size data at 0x{exports_offset:X}")
                 break
-            export_size = struct.unpack("<H", export_size_data)[0]
-
-            export_data = bv.read(exports_offset, export_size)
+            #export_size = struct.unpack("<H", export_size_data)[0]
+            export_size = len(export_size_data)
+            #This whole read is redundant at the moment, consider extending for variable size or read only once.
+            export_data = self.raw.read(exports_offset, export_size)
             if len(export_data) < export_size:
                 log_error(f"Incomplete export data at 0x{exports_offset:X}")
                 break
-
-            export_struct = self.struct_endianness + "HHHHHHIIII"
+            #BBHHHHH4sIIIIIIIII
+            export_struct = self.struct_endianness + "B1sHHHHHBBBBIIII"
             if len(export_data) < struct.calcsize(export_struct):
                 log_error(f"Incomplete export structure at 0x{exports_offset:X}")
                 break
-            export = struct.unpack(export_struct, export_data[:struct.calcsize(export_struct)])
+            export_struct = struct.unpack(export_struct, export_data[:struct.calcsize(export_struct)])
             (
-                size,
-                version,
-                attribute,
-                num_functions,
-                num_vars,
-                num_tls_vars,
-                unknown1,
-                library_nid,
-                library_name_addr,
-                nid_table_addr,
-                entry_table_addr,
-            ) = export
+                size,               #unsigned char structsize;
+                reserved1,          #unsigned char reserved1[1]; //a.k.a. 'auxattribute'
+                version,            #unsigned short version;
+                attribute,          #unsigned short attribute;
+                num_functions,      #unsigned short nfunc;
+                num_vars,           #unsigned short nvar;
+                num_tls_vars,       #unsigned short ntlsvar;
+                hashinfo,           #unsigned char hashinfo;
+                hashinfotls,        #unsigned char hashinfotls;
+                reserved2,          #unsigned char reserved2[1];
+                nidaltsets,         #unsigned char nidaltsets;
+                library_nid,        #Elf32_Word libname_nid;
+                library_name_addr,  #Elf32_Addr libname;
+                nid_table_addr,     #Elf32_Addr nidtable;
+                entry_table_addr,   #Elf32_Addr addtable;
+            ) = export_struct
 
-
-            library_name = self.read_string_at(bv, library_name_addr)
-
+            if attribute == 0x8000 and library_name_addr == 0:
+                library_name = "NONAME" #NONAME EXPORT,see: wiki.henkaku.xyz/vita/PRX#NONAME_exports
+            else:
+                library_name = self.read_string_at(bv, library_name_addr)
+            log_info(f"export library_name: {library_name}\nexport struct: {export_struct}") #TODO debug
 
             for i in range(num_functions):
                 nid_addr = nid_table_addr + i * 4
@@ -259,7 +272,11 @@ class VitaElf():
                     continue
                 function_nid = struct.unpack("<I", nid_data)[0]
                 function_addr = struct.unpack("<I", entry_data)[0]
-                function_name = self.lookup_nid_function(library_nid, function_nid, library_name)
+                if library_name == "NONAME" and function_nid == 0x935CD196:
+                    function_name = "module_start"
+                else:
+                    function_name = self.lookup_nid_function(library_nid, function_nid, library_name)
+                log_info(f"export symbol: {function_name}") #TODO debug
                 self.add_function_symbol(bv, function_addr, function_name)
 
 
@@ -272,7 +289,14 @@ class VitaElf():
                     continue
                 variable_nid = struct.unpack("<I", nid_data)[0]
                 variable_addr = struct.unpack("<I", entry_data)[0]
-                variable_name = self.lookup_nid_variable(library_nid, variable_nid, library_name)
+                if library_name == "NONAME":
+                    if variable_nid == 0x6C2224BA:
+                        variable_name = "module_info"
+                    elif variable_nid == 0x70FBA1E7:
+                        variable_name = "module_proc_param"
+                else:
+                    variable_name = self.lookup_nid_variable(library_nid, variable_nid, library_name)
+                log_info(f"export var: {variable_name}") #TODO
                 self.add_data_symbol(bv, variable_addr, variable_name)
 
             exports_offset += size
@@ -306,7 +330,7 @@ class VitaElf():
                 import_struct_size = 0x34
             elif import_size == 0x24:
                 # _scelibstub_prx2arm_new
-                import_struct = "<HHHHHHIIIIIII"
+                import_struct = self.struct_endianness + "HHHHHHIIIIIII"
                 import_struct_size = 0x24
             else:
                 log_error(f"Unknown import size: {import_size} bytes at 0x{imports_offset:X}")
@@ -334,7 +358,7 @@ class VitaElf():
                     reserved2,              # unsigned char reserved2[4]
                     library_nid,            # Elf32_Word libname_nid
                     library_name_addr,      # Elf32_Addr libname
-                    sce_sdk_version,              # Elf32_Word sce_sdk_version
+                    sce_sdk_version,        # Elf32_Word sce_sdk_version
                     func_nid_table_addr,    # Elf32_Addr func_nidtable
                     func_entry_table_addr,  # Elf32_Addr func_table
                     var_nid_table_addr,     # Elf32_Addr var_nidtable
@@ -387,12 +411,13 @@ class VitaElf():
                 variable_nid = struct.unpack("<I", nid_data)[0]
                 variable_stub_addr = struct.unpack("<I", entry_data)[0]
                 variable_name = self.lookup_nid_variable(library_nid, variable_nid, library_name)
+                log_info(f"importing var: {variable_name}") #TODO
                 self.add_data_symbol(bv, variable_stub_addr, variable_name)
 
             imports_offset += size
 
     def lookup_nid_function(self, library_nid, function_nid, library_name):
-    #look up function name using nid db
+    #look up function name using nid db - TODO: Figure out more efficient way, nested nightmare
         if self.nid_database and "modules" in self.nid_database:
             for module_name, module in self.nid_database["modules"].items():
                 if "libraries" in module:
@@ -406,7 +431,7 @@ class VitaElf():
         return f"{library_name}_{function_nid:08X}"
 
     def lookup_nid_variable(self, library_nid, variable_nid, library_name):
-    #look up var name using nid db
+    #look up var name using nid db - TODO: Figure out more efficient way, nested nightmare
         if self.nid_database and "modules" in self.nid_database:
             for module_name, module in self.nid_database["modules"].items():
                 if "libraries" in module:
