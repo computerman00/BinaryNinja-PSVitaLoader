@@ -13,7 +13,7 @@ import threading
 import struct
 import yaml
 import os
-import binaryninja
+
 class VitaElf():
 
     def __init__(self, bv: BinaryView):
@@ -502,7 +502,7 @@ def sweep_before_load(bv):
             log_info("ran {i} linear sweeps, potentially more functions undiscovered")
 
         #Switch back to main UI event thread and run plugin
-        binaryninja.execute_on_main_thread(lambda: VitaElf(bv).load_vita_symbols())
+        execute_on_main_thread(lambda: VitaElf(bv).load_vita_symbols())
 
     #Run linear sweep analysis in new thread.
     threading.Thread(target=n_linearsweep).start()
