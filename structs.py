@@ -69,6 +69,25 @@ def create_struct(bv: BinaryView, bn_type: str, addr: int):
         scelibstub_type = bv.get_type_by_name("SceLibStub_prx2arm")
         bv.define_data_var(addr=addr,var_type=scelibstub_type)
 
+    elif bn_type == "SceLibStub_prx2arm_new":
+        struct_fmt = "B B H H H H H I I I I I I"
+        struct_vars = [
+            "structsize", "reserved1", "version", "attribute", "nfunc",
+            "nvar", "ntlsvar", "libname_nid", "libname", "func_nidtable",
+            "func_table", "var_nidtable", "var_table"
+        ]
+        scelibstub_dt = make_bn_struct(struct_fmt, struct_vars)
+        bv.define_user_type("SceLibStub_prx2arm_new", Type.structure_type(scelibstub_dt))
+
+        #Remove any mis-interpreted instructions(functions) at data_addr
+        try:
+            rem_func = bv.get_functions_containing(addr)
+            bv.remove_function(rem_func[0])
+        except:
+            log_info("No function at SceLibStub_prx2arm_new location")
+        scelibstub_type = bv.get_type_by_name("SceLibStub_prx2arm_new")
+        bv.define_data_var(addr=addr,var_type=scelibstub_type)
+
     elif bn_type == "SceModuleInfo_prx2arm":
         struct_fmt = "H 2s 26s B B I I I I I I I I I I I I I I I"
         struct_vars = [
