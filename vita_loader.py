@@ -33,6 +33,7 @@ class VitaElf():
             self.process_exports(self.bv)
             self.process_imports(self.bv)
             self.clean_data_segs()
+
             log_info("Symbols added successfully.")
 
         except Exception as e:
@@ -160,13 +161,6 @@ class VitaElf():
 
         self.modname = modname.partition(b'\x00')[0].decode('ascii', errors='ignore')
         self.version = [b for b in self.version]  # Convert version from bytes to list of integers
-
-
-
-
-
-
-
 
 
     def get_module_info_offset(self):
@@ -438,6 +432,8 @@ class VitaElf():
                 self.add_data_symbol(bv, variable_addr, variable_name)
 
             imports_offset += size
+            
+
 
 
 
@@ -535,7 +531,7 @@ def sweep_before_load(bv):
     def n_linearsweep():
         func_cnt = 0    #function count
         i = 0           #current sweep iteration
-        n_max = 5      #max linear sweep runs
+        n_max = 3      #max linear sweep runs
 
         while i < n_max:
             bv.update_analysis_and_wait()           #wait for default analysis
@@ -569,4 +565,3 @@ def register_plugin():
     )
 
 register_plugin()
-
