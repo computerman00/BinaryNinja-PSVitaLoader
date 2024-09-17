@@ -458,7 +458,7 @@ class VitaElf():
         func = bv.get_function_at(addr)
         
         #set type to void with variables
-        func.function_type = func_type
+        func.type = func_type
         
         symbol = Symbol(SymbolType.ImportedFunctionSymbol, addr, name)
         
@@ -471,7 +471,8 @@ class VitaElf():
         # Optionally, define the data variable type
         bv.define_data_var(addr, Type.int(4, sign=False))
 
-    #There has to be a better pythonic way of doing this lol
+    #There has to be a better pythonic way of doing this.
+    #Technically would be faster to read into overkill sized buffer and split at b"\x00".
     def read_string_at(self, bv: BinaryView, addr: int):
         #reads until null-terminator from addr.
         s = b""
