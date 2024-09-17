@@ -31,6 +31,7 @@ class VitaElf():
             self.load_nid_database()
             self.process_exports(self.bv)
             self.process_imports(self.bv)
+            self.clean_data_segs()
 
             log_info("Symbols added successfully.")
 
@@ -136,7 +137,7 @@ class VitaElf():
         (
             self.attributes,    # short modattribute
             self.version,       # char modversion[2]
-            name_bytes,         # char modname[26]
+            modname,            # char modname[26]
             self.type,          # char terminal
             self.gp_value,      # char infoversion
             self.resreve,       # Elf32_Addr resreve
@@ -156,9 +157,15 @@ class VitaElf():
             self.extab_end,     # Elf32_Addr arm_extab_end
         ) = SceModuleInfo_unpacked
 
-        self.module_name = name_bytes.partition(b'\x00')[0].decode('ascii', errors='ignore')
+        self.modname = modname.partition(b'\x00')[0].decode('ascii', errors='ignore')
         self.version = [b for b in self.version]  # Convert version from bytes to list of integers
-        log_info(f"Extracted {self.module_name}, version: {self.version}")
+        
+
+        
+        
+
+        
+        
 
 
     def get_module_info_offset(self):
@@ -299,7 +306,7 @@ class VitaElf():
                         variable_name = "module_proc_param"
                 else:
                     variable_name = self.lookup_nid_variable(library_nid, variable_nid, library_name)
-                log_info(f"export var: {variable_name}") #TODO
+                log_info(f"export var: {variable_name} - var addr: {variable_addr}") #TODO
                 self.add_data_symbol(bv, variable_addr, variable_name)
 
             exports_offset += size
@@ -412,12 +419,14 @@ class VitaElf():
                 if len(nid_data) < 4 or len(entry_data) < 4:
                     continue
                 variable_nid = struct.unpack("<I", nid_data)[0]
-                variable_stub_addr = struct.unpack("<I", entry_data)[0]
+                variable_addr = struct.unpack("<I", entry_data)[0]
                 variable_name = self.lookup_nid_variable(library_nid, variable_nid, library_name)
-                log_info(f"importing var: {variable_name}") #TODO
-                self.add_data_symbol(bv, variable_stub_addr, variable_name)
+                log_info(f"importing var: {variable_name} - var addr: {variable_addr}") #TODO
+                self.add_data_symbol(bv, variable_addr, variable_name)
 
             imports_offset += size
+            
+
 
     def lookup_nid_function(self, library_nid, function_nid, library_name):
     #look up function name using nid db - TODO: Figure out more efficient way, nested nightmare
@@ -484,6 +493,16 @@ class VitaElf():
             addr += 1
         return s.decode("ascii", errors="ignore")
 
+    def clean_data_segs(self):
+        '''
+        With the last Linear Sweep run, Binary Ninja mis identifies lots of data segments past import_end as instructions(functions)
+        This will remove/undefine those functions.
+        '''
+        end_imports = self.base_addr + self.import_end
+        funcs = self.bv.functions
+        for func in funcs:
+            if func.start > end_imports:
+                self.bv.remove_function(func)
 
 def sweep_before_load(bv):
     '''
@@ -496,7 +515,7 @@ def sweep_before_load(bv):
     def n_linearsweep():
         func_cnt = 0    #function count
         i = 0           #current sweep iteration
-        n_max = 5      #max linear sweep runs
+        n_max = 3      #max linear sweep runs
 
         while i < n_max:
             bv.update_analysis_and_wait()           #wait for default analysis
@@ -512,7 +531,7 @@ def sweep_before_load(bv):
             i += 1
 
         if i >= n_max:
-            log_info("ran {i} linear sweeps, potentially more functions undiscovered")
+            log_info(f"ran {i} linear sweeps, potentially more functions undiscovered")
 
         #Switch back to main UI event thread and run plugin
         execute_on_main_thread(lambda: VitaElf(bv).load_vita_symbols())
