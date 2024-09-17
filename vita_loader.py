@@ -33,7 +33,6 @@ class VitaElf():
             self.process_exports(self.bv)
             self.process_imports(self.bv)
             self.clean_data_segs()
-
             log_info("Symbols added successfully.")
 
         except Exception as e:
@@ -326,23 +325,20 @@ class VitaElf():
 
 
         while imports_offset < imports_end:
-            import_size_data = self.raw.read(imports_offset, 0x34) #Need to get scemodimport version, hardcoded for now.
-            #TODO need to actually use this to get size to determine _scelibstub_prx2arm(0x34) or _scelibstub_prx2arm_new(0x24)
+            import_size_data = self.raw.read(imports_offset, 2) #Need to get scemodimport version, hardcoded for now.
             if len(import_size_data) < 2:
                 log_error(f"Incomplete import size data at 0x{imports_offset:X}")
                 break
-            #import_size = struct.unpack("<H", import_size_data)[0] #This may be a good option to figure out, will need to parse struct carefully tho to first get size.
-            #TODO: temp for tested binaries/eboot.elf's, need to properly account for _scelibstub_prx2arm_new(size 0x24) which is likely found in later vita games
-            import_size = len(import_size_data)
+            import_size = int.from_bytes(import_size_data, "little")
 
-            # TODO: See above, fix so import_size is actually dynamic to account for both _scelibstub_prx2arm(0x34) and _scelibstub_prx2arm_new(0x24). Can potentially be easily expanded to OG PSP binaries as-well(_scelibstub_psp - size: 0x14 or 0x18).
+            # TODO: Can potentially be easily expanded to OG PSP binaries as-well(_scelibstub_psp - size: 0x14 or 0x18).
             if import_size == 0x34:
                 # _scelibstub_prx2arm
                 import_struct = self.struct_endianness + "BBHHHHH4sIIIIIIIII"
                 import_struct_size = 0x34
             elif import_size == 0x24:
                 # _scelibstub_prx2arm_new
-                import_struct = self.struct_endianness + "HHHHHHIIIIIII"
+                import_struct = self.struct_endianness + "BBHHHHHIIIIII"
                 import_struct_size = 0x24
             else:
                 log_error(f"Unknown import size: {import_size} bytes at 0x{imports_offset:X}")
@@ -356,6 +352,7 @@ class VitaElf():
 
             import_values = struct.unpack(import_struct, import_data[:import_struct_size])
 
+            abs_addr = self.base_addr + imports_offset - ph_offset
             # Extract import fields based on format
             if import_size == 0x34:
                 # _scelibstub_prx2arm - see wiki.henkaku.xyz/vita/PRX#Imports
@@ -379,25 +376,26 @@ class VitaElf():
                     tls_entry_table_addr,   # Elf32_Addr tls_table
                 ) = import_values
                 # Add structs to bn datatypes
-
-                abs_addr = self.base_addr + imports_offset - ph_offset
                 structs.create_struct(self.bv, "SceLibStub_prx2arm", abs_addr)
-            else:
+            elif import_size == 0x24:
                 # _scelibstub_prx2arm_new
                 (
-                    size,                   # unsigned short version
+                    size,                   # unsigned char structsize;
+                    reserved1,              # unsigned char reserved1[1]
+                    version,                # unsigned short version;
                     attribute,              # unsigned short attribute
                     num_functions,          # unsigned short nfunc
                     num_vars,               # unsigned short nvar
-                    unknown1,               # unsigned short unknown
-                    library_nid,            # unsigned short library_nid
+                    ntlsvar,                # unsigned short ntlsvar
+                    library_nid,            # Elf32_Word libname_nid
                     library_name_addr,      # Elf32_Addr libname
                     func_nid_table_addr,    # Elf32_Addr func_nidtable
                     func_entry_table_addr,  # Elf32_Addr func_table
                     var_nid_table_addr,     # Elf32_Addr var_nidtable
                     var_entry_table_addr,   # Elf32_Addr var_table
-                    # Missing fields TODO: This is wrong. fix struct according to wiki.henkaku.xyz/vita/PRX#Imports
                 ) = import_values
+                # Add structs to bn datatypes
+                structs.create_struct(self.bv, "SceLibStub_prx2arm_new", abs_addr)
 
 
             #get lib name
@@ -432,8 +430,6 @@ class VitaElf():
                 self.add_data_symbol(bv, variable_addr, variable_name)
 
             imports_offset += size
-            
-
 
 
 
@@ -531,7 +527,7 @@ def sweep_before_load(bv):
     def n_linearsweep():
         func_cnt = 0    #function count
         i = 0           #current sweep iteration
-        n_max = 3      #max linear sweep runs
+        n_max = 5      #max linear sweep runs
 
         while i < n_max:
             bv.update_analysis_and_wait()           #wait for default analysis
@@ -565,3 +561,4 @@ def register_plugin():
     )
 
 register_plugin()
+
