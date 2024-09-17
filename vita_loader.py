@@ -13,6 +13,7 @@ import threading
 import struct
 import yaml
 import os
+import structs
 
 class VitaElf():
 
@@ -89,6 +90,7 @@ class VitaElf():
             ph_struct = self.struct_endianness + "IIIIIIII"
             ph = struct.unpack(ph_struct, ph_data)
             self.program_headers.append(ph)
+        self.base_addr = self.program_headers[0][2]
 
 
     def parse_sce_module_info(self):
@@ -109,7 +111,7 @@ class VitaElf():
             log_error("Invalid SceModuleInfo struct.")
             return None
 
-        #unpacking SceModuleInfo, expanded for easier format character mapping 
+        #unpacking SceModuleInfo, expanded for easier format character mapping
         module_info_struct = self.struct_endianness + (
             "H"    # unsigned short modattribute
             "2s"   # unsigned char modversion[2]
@@ -159,13 +161,6 @@ class VitaElf():
 
         self.modname = modname.partition(b'\x00')[0].decode('ascii', errors='ignore')
         self.version = [b for b in self.version]  # Convert version from bytes to list of integers
-        
-
-        
-        
-
-        
-        
 
 
     def get_module_info_offset(self):
@@ -229,8 +224,8 @@ class VitaElf():
 
 
         while exports_offset < exports_end:
-            #Is there even a point of making export size dynamic? Unless we split out _scelibent_ppu_common of size 0x10, could be useful to leave flexibility for potential future integration of scelibent_psp and other PRX1 variants. 
-            export_size_data = self.raw.read(exports_offset, 0x20) 
+            #Is there even a point of making export size dynamic? Unless we split out _scelibent_ppu_common of size 0x10, could be useful to leave flexibility for potential future integration of scelibent_psp and other PRX1 variants.
+            export_size_data = self.raw.read(exports_offset, 0x20)
             if len(export_size_data) < 0x20:
                 log_error(f"Incomplete export size data at 0x{exports_offset:X}")
                 break
@@ -241,7 +236,7 @@ class VitaElf():
             if len(export_data) < export_size:
                 log_error(f"Incomplete export data at 0x{exports_offset:X}")
                 break
-            export_struct = self.struct_endianness + "B1BHHHHHBBBBIIII"
+            export_struct = self.struct_endianness + "BBHHHHHBBBBIIII"
             if len(export_data) < struct.calcsize(export_struct):
                 log_error(f"Incomplete export structure at 0x{exports_offset:X}")
                 break
@@ -263,6 +258,12 @@ class VitaElf():
                 nid_table_addr,     #Elf32_Addr nidtable;
                 entry_table_addr,   #Elf32_Addr addtable;
             ) = export_struct
+
+            log_info(f"export_struct: {export_struct}")
+            # Add structs to bn datatypes
+            abs_addr = self.base_addr + exports_offset - ph_offset
+            structs.create_struct(self.bv, "SceLibEnt_prx2arm", abs_addr)
+
 
             if attribute == 0x8000 and library_name_addr == 0:
                 library_name = "NONAME" #NONAME EXPORT,see: wiki.henkaku.xyz/vita/PRX#NONAME_exports
@@ -302,12 +303,15 @@ class VitaElf():
                 if library_name == "NONAME":
                     if variable_nid == 0x6C2224BA:
                         variable_name = "module_info"
+                        structs.create_struct(self.bv, "SceModuleInfo_prx2arm", variable_addr)
                     elif variable_nid == 0x70FBA1E7:
                         variable_name = "module_proc_param"
+                        structs.create_struct(self.bv, "SceProcessParam", variable_addr)
                 else:
                     variable_name = self.lookup_nid_variable(library_nid, variable_nid, library_name)
-                log_info(f"export var: {variable_name} - var addr: {variable_addr}") #TODO
-                self.add_data_symbol(bv, variable_addr, variable_name)
+                    self.add_data_symbol(bv, variable_addr, variable_name)
+                log_info(f"export var: {variable_name} - var addr: {hex(variable_addr)}") #TODO
+
 
             exports_offset += size
 
@@ -322,10 +326,8 @@ class VitaElf():
 
 
         while imports_offset < imports_end:
-            log_info(f"imports_offset: {hex(imports_offset)}") #TODO debug
-
             import_size_data = self.raw.read(imports_offset, 0x34) #Need to get scemodimport version, hardcoded for now.
-            log_info(f"import_size_data: {import_size_data}") #TODO need to actually use this to get size to determine _scelibstub_prx2arm(0x34) or _scelibstub_prx2arm_new(0x24)
+            #TODO need to actually use this to get size to determine _scelibstub_prx2arm(0x34) or _scelibstub_prx2arm_new(0x24)
             if len(import_size_data) < 2:
                 log_error(f"Incomplete import size data at 0x{imports_offset:X}")
                 break
@@ -359,7 +361,7 @@ class VitaElf():
                 # _scelibstub_prx2arm - see wiki.henkaku.xyz/vita/PRX#Imports
                 (
                     size,                   # unsigned char structsize
-                    reserved1,               # unsigned char reserved1
+                    reserved1,              # unsigned char reserved1
                     version,                # unsigned short version
                     attribute,              # unsigned short attribute
                     num_functions,          # unsigned short nfunc
@@ -376,6 +378,10 @@ class VitaElf():
                     tls_nid_table_addr,     # Elf32_Addr tls_nidtable
                     tls_entry_table_addr,   # Elf32_Addr tls_table
                 ) = import_values
+                # Add structs to bn datatypes
+
+                abs_addr = self.base_addr + imports_offset - ph_offset
+                structs.create_struct(self.bv, "SceLibStub_prx2arm", abs_addr)
             else:
                 # _scelibstub_prx2arm_new
                 (
@@ -392,6 +398,7 @@ class VitaElf():
                     var_entry_table_addr,   # Elf32_Addr var_table
                     # Missing fields TODO: This is wrong. fix struct according to wiki.henkaku.xyz/vita/PRX#Imports
                 ) = import_values
+
 
             #get lib name
             library_name = self.read_string_at(bv, library_name_addr)
@@ -428,6 +435,8 @@ class VitaElf():
             
 
 
+
+
     def lookup_nid_function(self, library_nid, function_nid, library_name):
     #look up function name using nid db - TODO: Figure out more efficient way, nested nightmare
         if self.nid_database and "modules" in self.nid_database:
@@ -459,25 +468,31 @@ class VitaElf():
     def add_function_symbol(self, bv: BinaryView, addr: int, name: str):
         if not bv.get_function_at(addr):
             bv.create_user_function(addr)
-        
+
         #Setting imports to void and tell binary ninja to resolve variables.
         func_type = Type.function(Type.void(), [], variable_arguments=True)
-        
+
         #Get the function pointer
         func = bv.get_function_at(addr)
-        
+
         #set type to void with variables
         func.type = func_type
-        
+
         symbol = Symbol(SymbolType.ImportedFunctionSymbol, addr, name)
-        
+
         #define as import, will need to add check for export but it appears to just be a color coding thing for our purposes.
         bv.define_imported_function(symbol, func)
 
     def add_data_symbol(self, bv: BinaryView, addr: int, name: str):
         symbol = Symbol(SymbolType.DataSymbol, addr, name)
         bv.define_user_symbol(symbol)
-        # Optionally, define the data variable type
+
+        # Binary Ninja likely mis-interpreted instructions(functions) at data_addr after linear sweep.
+        try:
+            rem_func = self.bv.get_functions_containing(addr)
+            self.bv.remove_function(rem_func[0])
+        except:
+            log_info(f"No function to remove at addr: {hex(addr)}")
         bv.define_data_var(addr, Type.int(4, sign=False))
 
     #There has to be a better pythonic way of doing this.
@@ -503,6 +518,7 @@ class VitaElf():
         for func in funcs:
             if func.start > end_imports:
                 self.bv.remove_function(func)
+
 
 def sweep_before_load(bv):
     '''
@@ -538,7 +554,7 @@ def sweep_before_load(bv):
 
     #Run linear sweep analysis in new thread.
     threading.Thread(target=n_linearsweep).start()
-    
+
 def register_plugin():
     #register plugin after the ARMv7 BinaryView is loaded.
 
