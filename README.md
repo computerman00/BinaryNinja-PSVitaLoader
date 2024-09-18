@@ -1,13 +1,21 @@
 # BinaryNinja-PSVitaLoader
 PS Vita ELF/PRX2 loader plugin for Binary Ninja
 
+## Table of Contents
+1. [Description](#description)
+2. [Plugin Usage](#plugin-usage)
+3. [Notes/Issues](#notesissues)
+4. [Use-case examples](#use-case-examples)
+5. [TODO](#todo)
+6. [Credits](#credits)
+7. [Legal](#legal)
 
 ### Description:
 A Binary Ninja Plugin for PRX2 PS Vita eboot.bin ELFs. 
 
 Dynamic linking of modules on the PS Vita [is performed](https://wiki.henkaku.xyz/vita/NID#Usage) by NID(**N**umeric **Id**entifier) of a function or variable instead of names. The primary purpose of this plugin is to resolve all import/export function/variable names, create symbols for them, and load them back into the default ELF BinaryView at their respective position. This plugin will also add PS Vita(PRX2) specific datatypes with locations in the binary resolved(if applicable). Additionally, this plugin attempts to do some cleanup resulting from the decompilation of the mixed ARMv7/thumb2 instruction sets, removing some misaligned/junk instructions in places where there should have been in-line data. 
 
-### Plugin use:
+### Plugin Usage:
 Loading the plugin will prompt for a NID database yaml file
 ![Selecting NID DB](/images/nid-db-select.png)
 
@@ -30,10 +38,26 @@ The plugin will first run linear sweep analysis until no new functions are creat
 
 At this point, any sce* function call should be resolved by name, this is incredibly useful for finding specific function calls to patch games or just simply getting a better understanding of the binary for reverse engineering.
 
-### Use-case examples:
-A good example is to leverage this to patch games to unlock the FPS or allow them to run at full PS Vita resolution. 
 
-Thanks to the talented contributors of VitaGrafix, we can use an already patched game from the VitaGrafix [patchlist](https://github.com/Electry/VitaGrafixPatchlist/blob/master/patchlist.txt) as an educational resource to cross-check our own patches.
+### Notes/Issues:
+- Tested to be working on Binary Ninja `4.1.5902-Stable` and `4.2.6075-dev`
+- Binary Ninja appears to trip in ARMv7/thumb2 mixed instruction sets binaries. An issue was encountered where if the binary is detected as ARMv7(All were while testing) and the first instruction is a Thumb2 instruction, it will mangle the entire dis-assembled binary. To fix this, right click initial function/instruction->Make Function at This Address->thumb2->linux-thumb2. Next run Linear Sweep again, this will fix the binary and later instruction set switches(typically `blx`) are sometimes accounted for properly.
+
+A painful but much better solution to thumb2 start: After ensuring the very first function(@base_addr) is set to thumb2 manually, I have had great luck doing the following in the BN console:
+```python
+>>> thumb2 = binaryninja.Architecture['thumb2']
+... 
+>>> for func in bv.functions:
+... 	if func.arch != thumb2:
+... 		bv.remove_function(func)
+```
+After all non-thumb2 functions are removed, either (re)load the Vita Loader plugin(recommended) or run a few linear sweeps, this will correctly identify instruction set switches and give you a clean binary view(for the most part). If anyone knows how to resolve this globally, please do share - I have tried forcing the platform but because the binary is technically `armv7` the platform switches back to `linux-armv7`.
+
+
+### Use-case examples:
+There are many great use-cases to learning more about reverse engineering binaries, a good example is to leverage this to patch binaries to unlock the FPS or allow them to run at full PS Vita resolution. 
+
+Thanks to the talented contributors of [VitaGrafix](https://github.com/Electry/VitaGrafix), we can learn from the patches in the VitaGrafix [patchlist](https://github.com/Electry/VitaGrafixPatchlist/blob/master/patchlist.txt) and use it as an educational resource to cross-check against.
 
 EXAMPLE:
 
@@ -65,30 +89,14 @@ Cross referencing with the patch in VitaGrafix we can confirm our suspicions:
 @FPS
 0:0x10C104 t1_mov(0, vblank)
 ```
-NOTE: In the case of unlocking frame limit, observing the `sceDisplayWaitVblankStart*` call is usually a good start, as this call will wait for the next vblank start, which will occur after the last scanline and before the next VSync interval. However, this isn't always straightforward as many games rely on VSync and modifying anything directly related will usually cause games to speed up. Further research is needed on a binary-to-binary basis. The [VitaGrafixPatchlist](https://github.com/Electry/VitaGrafixPatchlist/blob/master/patchlist.txt) is a great resource for comparing games you have purchased/owned and backed-up to understand how all the talented contributors were able to patch-out FPS caps. 
+NOTE: In the case of unlocking frame limit, observing the `sceDisplayWaitVblankStart*` call is usually a good start, as this call will wait for the next vblank start, which will occur after the last scanline and before the next VSync interval. However, this isn't always straightforward as many games rely on VSync and modifying anything directly related will usually cause games to speed up. Further research is needed on a binary-to-binary basis. 
 
-Another example in the popular [nzportable](https://github.com/nzp-team/nzportable) port, a game running at 60fps natively 
+Another example in the popular [nzportable](https://github.com/nzp-team/nzportable) game running at 60fps natively 
 ![nzp fps](/images/example2-fps.png)
 
 The variable here wasn't resolved, however looking at the data at that address, we see its just a `1`, this indicates the game is capped to the screens refresh rate(60Hz), as 1 vBlank interval will occur for every vSync interval. 
+
 ![nzp fps var](/images/example2-fps-data.png)
-
-
-### Notes/Issues:
-- Tested to be working on Binary Ninja `4.1.5902-Stable` and `4.2.6075-dev`
-- Binary Ninja appears to trip in ARMv7/thumb2 mixed instruction sets binaries. An issue was encountered where if the binary is detected as ARMv7(All were while testing) and the first instruction is a Thumb2 instruction, it will mangle the entire dis-assembled binary. To fix this, right click initial function/instruction->Make Function at This Address->thumb2->linux-thumb2. Next run Linear Sweep again, this will fix the binary and later instruction set switches(typically `blx`) are sometimes accounted for properly.
-
-A painful but much better solution to thumb2 start: After ensuring the very first function(@base_addr) is set to thumb2 manually, I have had great luck doing the following in the BN console:
-```
->>> thumb2 = binaryninja.Architecture['thumb2']
-... 
->>> thumb2
-<arch: thumb2>
->>> for func in bv.functions:
-... 	if func.arch != thumb2:
-... 		bv.remove_function(func)
-```
-After all non-thumb2 functions are removed, either (re)load the Vita Loader plugin(recommended) or run a few linear sweeps, this will correctly identify instruction set switches and give you a nice, clean binary view(As originally intended). If anyone knows how to resolve this globally, please do share - I have tried forcing the platform but because the binary is technically `armv7` the platform switches back to `linux-armv7`.
 
 
 ### TODO:
@@ -96,7 +104,7 @@ After all non-thumb2 functions are removed, either (re)load the Vita Loader plug
 - Change project structure to standardized Binary Ninja plugin structure.
 - Extend support to `scelibstub_psp`, `scelibent_psp` and other PRX1 primitives to support the OG PSP.
 - Extend to full custom BinaryView plugin with support for relocations
-- Potentially extending un-implenented instructions commonly used within Vita/PRX2 elfs(Such as: vcvt, vdiv, vmov, vmrs and other fp related instructions) - UPDATE: The binaryninja team is [already hard at work on these](https://github.com/Vector35/binaryninja-api/commits/dev/arch/armv7).
+- ~~Potentially extending un-implenented instructions commonly used within Vita/PRX2 elfs(Such as: vcvt, vdiv, vmov, vmrs and other fp related instructions)~~ - The binaryninja team is [already hard at work on these](https://github.com/Vector35/binaryninja-api/commits/dev/arch/armv7).
 
 
 ### Credits:
