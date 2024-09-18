@@ -5,7 +5,7 @@ PS Vita ELF/PRX2 loader plugin for Binary Ninja
 ### Description:
 A Binary Ninja Plugin for PRX2 PS Vita eboot.bin ELFs. 
 
-Dynamic linking of modules on the PS Vita [is preformed](https://wiki.henkaku.xyz/vita/NID#Usage) by NID(**N**umeric **Id**entifier) of a function or variable instead of names. The primary purpose of this plugin is to resolve all import/export function/variable names, create symbols for them, and load them back into the default ELF BinaryView at their respective position. This plugin will also add PS Vita(PRX2) specific datatypes with locations in the binary resolved(if applicable). Additionally, this plugin attempts to do some cleanup resulting from the decompilation of the mixed ARMv7/thumb2 instruction sets, removing some misaligned/junk instructions in places where there should have been in-line data. 
+Dynamic linking of modules on the PS Vita [is performed](https://wiki.henkaku.xyz/vita/NID#Usage) by NID(**N**umeric **Id**entifier) of a function or variable instead of names. The primary purpose of this plugin is to resolve all import/export function/variable names, create symbols for them, and load them back into the default ELF BinaryView at their respective position. This plugin will also add PS Vita(PRX2) specific datatypes with locations in the binary resolved(if applicable). Additionally, this plugin attempts to do some cleanup resulting from the decompilation of the mixed ARMv7/thumb2 instruction sets, removing some misaligned/junk instructions in places where there should have been in-line data. 
 
 ### Plugin use:
 Loading the plugin will prompt for a NID database yaml file
@@ -31,18 +31,14 @@ The plugin will first run linear sweep analysis until no new functions are creat
 At this point, any sce* function call should be resolved by name, this is incredibly useful for finding specific function calls to patch games or just simply getting a better understanding of the binary for reverse engineering.
 
 ### Use-case examples:
-A good example(and one of the primary motivations of this project) is to leverage this to patch games to unlock the FPS or allow them to run at full PS Vita resolution. 
+A good example is to leverage this to patch games to unlock the FPS or allow them to run at full PS Vita resolution. 
 
 Thanks to the talented contributors of VitaGrafix, we can use an already patched game from the VitaGrafix [patchlist](https://github.com/Electry/VitaGrafixPatchlist/blob/master/patchlist.txt) as an educational resource to cross-check our own patches.
 
 EXAMPLE:
 
-
-Game: Sly Cooper and the Thievius Raccoonus - PCSA00096
-
-Knowing the game runs at `720x408`, we can search for any values set to 0x2d0(720). This results in two finds, thankfully this example is obvious, as 0x198(408) is set right after 720. We do the search in Psuedo C mode but switch to dissasembly to get the exact address:
+Knowing this game runs at `720x408`, we can search for any values set to 0x2d0(720). This results in two finds, thankfully this example is obvious, as 0x198(408) is set right after 720. We do the search in Psuedo C mode but switch to dissasembly to get the exact address:
 ![Finding resolution in binary](/images/finding_res.png)
-
 
 Referencing the VitaGrafix patchlist, we confirm these are the correct addresses(Represented as offsets):
 ```
@@ -50,6 +46,10 @@ Referencing the VitaGrafix patchlist, we confirm these are the correct addresses
 0:0xE0AF8 t2_mov(1, 1, fb_w)
 0:0xE0AFE t2_mov(1, 1, fb_h)
 ```
+
+Another potential method to patch resolution is to cross reference the `sceDisplaySetFrameBuf` symbol and figure out where the framebuffer is updated/set, this takes in a pointer to the `SceDisplayFrameBuf` struct which contains the framebuffer width and height. These values are sometimes set just before the function call. According to the [vitasdk documentation](https://docs.vitasdk.org/group__SceDisplayKernel.html#structSceDisplayFrameBuf) the following resolutions can be set: `480x272`, `640x368`, `720x408`, `960x544`. 
+
+![example](/images/example.png)
 
 
 Next, we can search for Vsync(vBlank) related calls. Searching for cross references on `sceDisplayWaitVblankStart` we find that 2 is moved into r0 just before `sceDisplayWaitVblankStartMulti` is called. This likely indicates that the game will wait for 2 vBlank intervals before a VSync, this effectively limits the framerate to half of the displays refresh rate(30fps).
@@ -60,7 +60,6 @@ Pseudo-C view(with added vitasdk headers):
 ![Pseudo-C view](/images/pseudo_c_view.png)
 
 
-
 Cross referencing with the patch in VitaGrafix we can confirm our suspicions:
 ```
 @FPS
@@ -68,12 +67,12 @@ Cross referencing with the patch in VitaGrafix we can confirm our suspicions:
 ```
 NOTE: In the case of unlocking frame limit, observing the `sceDisplayWaitVblankStart*` call is usually a good start, as this call will wait for the next vblank start, which will occur after the last scanline and before the next VSync interval. However, this isn't always straightforward as many games rely on VSync and modifying anything directly related will usually cause games to speed up. Further research is needed on a binary-to-binary basis. The [VitaGrafixPatchlist](https://github.com/Electry/VitaGrafixPatchlist/blob/master/patchlist.txt) is a great resource for comparing games you have purchased/owned and backed-up to understand how all the talented contributors were able to patch-out FPS caps. 
 
+Another example in the popular [nzportable](https://github.com/nzp-team/nzportable) port, a game running at 60fps natively 
+![nzp fps](/images/example2-fps.png)
 
-EXAMPLE:
+The variable here wasn't resolved, however looking at the data at that address, we see its just a `1`, this indicates the game is capped to the screens refresh rate(60Hz), as 1 vBlank interval will occur for every vSync interval. 
+![nzp fps var](/images/example2-fps-data.png)
 
-Another potential method to patch resolution is to cross reference the `sceDisplaySetFrameBuf` symbol and figure out where the framebuffer is updated/set, this takes in a pointer to the `SceDisplayFrameBuf` struct which contains the framebuffer width and height. These are typically set just before the function call. In this example, we can see this game already runs at full resolution as `960x544` is set just prior to the function call. In the majority of games tested(patch applied at run-time via [VitaGrafix](https://github.com/Electry/VitaGrafix)), the following resolutions can be set: `480x272`, `640x368`, `720x408`. 
-
-![example](/images/example.png)
 
 ### Notes/Issues:
 - Tested to be working on Binary Ninja `4.1.5902-Stable` and `4.2.6075-dev`
@@ -93,6 +92,7 @@ After all non-thumb2 functions are removed, either (re)load the Vita Loader plug
 
 
 ### TODO:
+- Split functions and utility across multiple imports to maintain readability.
 - Change project structure to standardized Binary Ninja plugin structure.
 - Extend support to `scelibstub_psp`, `scelibent_psp` and other PRX1 primitives to support the OG PSP.
 - Extend to full custom BinaryView plugin with support for relocations
@@ -108,5 +108,8 @@ After all non-thumb2 functions are removed, either (re)load the Vita Loader plug
 - The [VitaLoader Redux](https://github.com/CreepNT/VitaLoaderRedux) project, a Vita loader plugin for Ghidra with way more than just symbol mapping support - although not a Ghidra or Java fan, I studied portions of the project and its amazingly clarifying inline comments when stuck. 
 
 
+### Legal
 
 “PlayStation” and "PlayStation Vita" are registered trademarks of Sony Computer Entertainment Inc. This tool is **NOT** affiliated with, endorsed by, related to, or derived from confidential materials belonging to Sony Computer Entertainment Inc.
+
+This tool was created for educational, security research purposes. Anything mentioned in this repository, any examples shown, and the plugin itself will **NOT** and can **NOT** break any encryption or circumvent protections in a binary.
