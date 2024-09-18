@@ -1,13 +1,21 @@
 # BinaryNinja-PSVitaLoader
 PS Vita ELF/PRX2 loader plugin for Binary Ninja
 
+## Table of Contents
+1. [Description](#description)
+2. [Plugin Usage](#plugin-usage)
+3. [Notes/Issues](#notesissues)
+4. [Use-case examples](#use-case-examples)
+5. [TODO](#todo)
+6. [Credits](#credits)
+7. [Legal](#legal)
 
 ### Description:
 A Binary Ninja Plugin for PRX2 PS Vita eboot.bin ELFs. 
 
 Dynamic linking of modules on the PS Vita [is performed](https://wiki.henkaku.xyz/vita/NID#Usage) by NID(**N**umeric **Id**entifier) of a function or variable instead of names. The primary purpose of this plugin is to resolve all import/export function/variable names, create symbols for them, and load them back into the default ELF BinaryView at their respective position. This plugin will also add PS Vita(PRX2) specific datatypes with locations in the binary resolved(if applicable). Additionally, this plugin attempts to do some cleanup resulting from the decompilation of the mixed ARMv7/thumb2 instruction sets, removing some misaligned/junk instructions in places where there should have been in-line data. 
 
-### Plugin use:
+### Plugin Usage:
 Loading the plugin will prompt for a NID database yaml file
 ![Selecting NID DB](/images/nid-db-select.png)
 
@@ -49,7 +57,7 @@ After all non-thumb2 functions are removed, either (re)load the Vita Loader plug
 
 
 ### Use-case examples:
-There are many great use-cases to learning more about reverse engineering binaries, a good example is to leverage this to patch games to unlock the FPS or allow them to run at full PS Vita resolution. 
+There are many great use-cases to learning more about reverse engineering binaries, a good example is to leverage this to patch binaries to unlock the FPS or allow them to run at full PS Vita resolution. 
 
 Thanks to the talented contributors of [VitaGrafix](https://github.com/Electry/VitaGrafix), we can learn from the patches in the VitaGrafix [patchlist](https://github.com/Electry/VitaGrafixPatchlist/blob/master/patchlist.txt) and use it as an educational resource to cross-check against.
 
