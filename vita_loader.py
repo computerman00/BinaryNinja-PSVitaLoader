@@ -13,7 +13,7 @@ import threading
 import struct
 import yaml
 import os
-import structs
+from .structs import create_struct
 
 class VitaElf():
     def __init__(self, bv: BinaryView):
@@ -53,7 +53,6 @@ class VitaElf():
         Parse the ELF and program headers
         """
         header_data = self.raw.read(0, 0x40)
-        log_info(f"Header data len: {len(header_data)}") #TODO debug
         e_ident = header_data[:16]
         self.ei_class = e_ident[4]
         self.ei_data = e_ident[5]
@@ -88,7 +87,6 @@ class VitaElf():
             self.e_shnum,
             self.e_shstrndx,
         ) = elf_header
-        log_info(f"elf_header struct: {elf_header}") #TODO debug
 
         #get the program headers.
         self.program_headers = []
@@ -178,7 +176,7 @@ class VitaElf():
 
     def get_module_info_offset(self):
         """
-        Locate the SceModuleInfo structs offset. Based on the ELF type, this can be located in various areas. According to the Vita Development Wiki(wiki.henkaku.xyz/vita/PRX#Location):
+        Locate the SceModuleInfo struct offset. Based on the ELF type, this can be located in various areas. According to the Vita Development Wiki(wiki.henkaku.xyz/vita/PRX#Location):
         For ET_SCE_EXEC modules, when e_entry is not null, SceModuleInfo structure is located in text segment at offset e_entry. Else it is located in text segment (first LOAD segment) at offset Elf32_Phdr[text_seg_id].p_paddr - Elf32_Phdr[text_seg_id].p_offset.
         For ET_SCE_RELEXEC modules, SceModuleInfo structure is located in the segment indexed by the upper two bits of e_entry of the ELF header. The structure is stored at the base offset of the segment plus the offset defined by the bottom 30 bits of e_entry.
         """
@@ -188,8 +186,8 @@ class VitaElf():
         PT_LOAD = 1
 
         '''
-        #Commented this out, only in rare cases is it e_entry for ET_SCE_EXEC?
-        #Need to dump rest of owned games and find such a case - this should be easily confirmed by pulling first struct member(attribute) and checking for "SCE_MODULE_ATTR_*"
+        #Commented this out, only in rare cases is SceModuleInfo at e_entry for ET_SCE_EXEC?
+        #No such cases found in ~20 binaries checked but this should be easily confirmed by pulling first struct member(attribute) and checking for "SCE_MODULE_ATTR_*"
         if self.e_type == ET_SCE_EXEC:
             if self.e_entry != 0: #This isnt always true, only in some cases?
                 # SceModuleInfo is at e_entry, havent seen it in current binaries but according to wiki.henkaku.xyz/vita/PRX it can happen.
@@ -201,21 +199,23 @@ class VitaElf():
                     p_offset = ph[1]
                     p_paddr = ph[3]
                     if p_type == PT_LOAD:
-                        mod_info_offset = p_paddr - p_offset
+                        mod_info_offset = p_paddr - p_offset #this should be vaddr?
                         if mod_info_offset >= 0:
-                            return mod_info_offset #Can check if None, if so continue
+                            return mod_info_offset
         '''
         #For ET_SCE_RELEXEC and ET_SCE_ARMRELEXEC (AND FOR ET_SCE_EXEC in all test binaries)
         if self.e_type in [ET_SCE_RELEXEC, ET_SCE_ARMRELEXEC, ET_SCE_EXEC]: #Some ET_SCE_EXEC
-            #SceModuleInfo struct is in segment indexed by the upper two bits of e_entry
-            seg_idx = (self.e_entry >> 30) & 0x3 #0...Is this really necessary???
+            #ET_SCE_EXEC: in text segment (first LOAD seg) at offset Elf32_Phdr[text_seg_id].p_paddr - Elf32_Phdr[text_seg_id].p_offset
+            #ET_SCE_RELEXEC: SceModuleInfo struct is in segment indexed by the upper two bits of e_entry
+            seg_idx = (self.e_entry >> 30) & 0x3
+            #Offset within segment
             seg_offset = self.e_entry & 0x3FFFFFFF
+
             if seg_idx < len(self.program_headers):
                 ph = self.program_headers[seg_idx]
                 p_type = ph[0]
                 p_offset = ph[1]
                 if p_type == PT_LOAD:
-                    log_info(f"A p_offset + seg_offset : {p_offset + seg_offset}")
                     return p_offset + seg_offset
 
 
@@ -240,22 +240,26 @@ class VitaElf():
         Promts the user for a vitasdk header file.
         This is used to add vita datatypes & resolve functions argument count, names, types, and returns.
         """
-        header_path = get_open_filename_input("Select header file for proper func/arg type and arg names")         
-        try:
-            with open(header_path, 'r') as f:
-                header_content = f.read()
-        except:
-            log_info("No header file loaded, functions will default to void and argument count, name, and types will NOT be loaded.")
-        
+        header_path = get_open_filename_input("Select header file. RECOMMENDED for proper func arg count,type,names")
         if not header_path:
-            log_info("No header file specified.")
+            log_info("No header file specified. Functions will default to void and argument count, name, and types will NOT be loaded.")
             self.sdk_hdr = 0
         else:
+            try:
+                with open(header_path, 'r') as f:
+                    header_content = f.read()
+            except:
+                log_error("Failed to load header file")
+
             #Store all types from vitasdk header for class-wide use.
             self.sdk_hdr = self.bv.platform.parse_types_from_source(header_content)
             #Add types while we are here to avoid another header check
             for name, tobj in self.sdk_hdr.types.items():
 	            self.bv.define_user_type(name, tobj)
+
+
+
+
 
     def process_exports(self, bv: BinaryView):
         """
@@ -265,24 +269,18 @@ class VitaElf():
         ph_offset = self.program_headers[0][1]
         exports_offset = self.export_top + ph_offset
         exports_end = self.export_end + ph_offset
-        log_info(f"Export offset start: {hex(exports_offset)}")
         if not exports_offset or not exports_end:
             log_error("Export sections not defined in SceModuleInfo.")
             return
 
 
         while exports_offset < exports_end:
-            #Is there even a point of making export size dynamic? Unless we split out _scelibent_ppu_common of size 0x10, could be useful to leave flexibility for potential future integration of scelibent_psp and other PRX1 variants.
-            
-            #export_size_data = self.raw.read(exports_offset, 2)
-            export_size_data = self.raw.read(exports_offset, 0x20)
-            if len(export_size_data) < 0x20:
+            #Consider splitting out _scelibent_ppu_common(size: 0x10), could be useful to leave flexibility for potential future integration of scelibent_psp and other PRX1 variants.
+            export_size_data = self.raw.read(exports_offset, 2)
+            if len(export_size_data) < 2:
                 log_error(f"Incomplete export size data at 0x{exports_offset:X}")
                 break
-                
-            #export_size = int.from_bytes(export_size_data, "little")
-            export_size = len(export_size_data)
-            #This whole read is redundant at the moment, consider extending for variable size or read only once.
+            export_size = int.from_bytes(export_size_data, "little")
             export_data = self.raw.read(exports_offset, export_size)
             if len(export_data) < export_size:
                 log_error(f"Incomplete export data at 0x{exports_offset:X}")
@@ -310,17 +308,16 @@ class VitaElf():
                 entry_table_addr,   #Elf32_Addr addtable;
             ) = export_struct
 
-            log_info(f"export_struct: {export_struct}")
             # Add structs to bn datatypes
             abs_addr = self.base_addr + exports_offset - ph_offset
-            structs.create_struct(self.bv, "SceLibEnt_prx2arm", abs_addr)
+            create_struct(self.bv, "SceLibEnt_prx2arm", abs_addr)
 
 
             if attribute == 0x8000 and library_name_addr == 0:
                 library_name = "NONAME" #NONAME EXPORT,see: wiki.henkaku.xyz/vita/PRX#NONAME_exports
             else:
                 library_name = self.read_string_at(bv, library_name_addr)
-            log_info(f"export library_name: {library_name}\nexport struct: {export_struct}") #TODO debug
+            #log_info(f"Exporting library: {library_name}\nExport struct: {export_struct}") #debug
 
             for i in range(num_functions):
                 nid_addr = nid_table_addr + i * 4
@@ -334,13 +331,11 @@ class VitaElf():
                 if library_name == "NONAME" and function_nid == 0x935CD196:
                     function_name = "module_start"
                     self.module_start_addr = function_addr
-                    function_addr -= 1 #Odd off by one byte causes misalignment on NONAME exports. Example: hex(struct.unpack("I",read(entry_table_addr,4)) = 0x8108675d. The module_start should be located at 0x8108675c in this example.
-                    log_info(f"module_start addr: {function_addr}") #TODO debug
+                    function_addr -= 1 #Odd off by one byte causes misalignment on NONAME exports. Example: hex(struct.unpack("I",read(entry_table_addr,4)) = *module_start+1.
                 else:
                     function_name = self.lookup_nid_function(library_nid, function_nid, library_name)
                 self.add_function_symbol(bv, function_addr, function_name)
-                log_info(f"export symbol: {function_name}") #TODO debug
-                #self.add_function_symbol(bv, function_addr, function_name)
+                #log_info(f"Exporting Function: {function_name}") #debug
 
 
             for i in range(num_vars):
@@ -356,14 +351,15 @@ class VitaElf():
                 if library_name == "NONAME":
                     if variable_nid == 0x6C2224BA:
                         variable_name = "module_info"
-                        structs.create_struct(self.bv, "SceModuleInfo_prx2arm", variable_addr)
+                        create_struct(self.bv, "SceModuleInfo_prx2arm", variable_addr)
                     elif variable_nid == 0x70FBA1E7:
                         variable_name = "module_proc_param"
-                        structs.create_struct(self.bv, "SceProcessParam", variable_addr)
+                        create_struct(self.bv, "SceProcessParam", variable_addr)
                 else:
                     variable_name = self.lookup_nid_variable(library_nid, variable_nid, library_name)
+                    # If NONAME, create_struct defines the data var, can later change this to return the struct and add optional var_type to add_data_symbol().
                     self.add_data_symbol(bv, variable_addr, variable_name)
-                log_info(f"export var: {variable_name} - var addr: {hex(variable_addr)}") #TODO
+                #log_info(f"Exporting Variable: {variable_name} - Var addr: {hex(variable_addr)}") #debug
 
             exports_offset += size
 
@@ -371,6 +367,7 @@ class VitaElf():
         """
         Process module imports, get library name, enumerate and lookup funcs/vars by NID, add functions/variable symbols into the default ELF BinaryView.
         """
+        log_info("Parsing imports")
         ph_offset = self.program_headers[0][1]
         imports_offset = self.import_top + ph_offset
         imports_end = self.import_end + ph_offset
@@ -431,7 +428,7 @@ class VitaElf():
                     tls_entry_table_addr,   # Elf32_Addr tls_table
                 ) = import_values
                 # Add structs to bn datatypes
-                structs.create_struct(self.bv, "SceLibStub_prx2arm", abs_addr)
+                create_struct(self.bv, "SceLibStub_prx2arm", abs_addr)
             elif import_size == 0x24:
                 # _scelibstub_prx2arm_new
                 (
@@ -450,14 +447,14 @@ class VitaElf():
                     var_entry_table_addr,   # Elf32_Addr var_table
                 ) = import_values
                 # Add structs to bn datatypes
-                structs.create_struct(self.bv, "SceLibStub_prx2arm_new", abs_addr)
+                create_struct(self.bv, "SceLibStub_prx2arm_new", abs_addr)
 
 
             #get lib name
             library_name = self.read_string_at(bv, library_name_addr)
-            log_info(f"library_name: {library_name}\nimport_values: {import_values}") #TODO debug
+            #log_info(f"Importing Library: {library_name}\nImport unpacked: {import_values}") #debug
 
-            #process imported functions, lookup by nid, add symbol
+            # Process imported functions, lookup by nid, add symbol
             for i in range(num_functions):
                 nid_addr = func_nid_table_addr + i * 4
                 entry_addr = func_entry_table_addr + i * 4
@@ -468,6 +465,7 @@ class VitaElf():
                 function_nid = struct.unpack("<I", nid_data)[0]
                 function_stub_addr = struct.unpack("<I", entry_data)[0]
                 function_name = self.lookup_nid_function(library_nid, function_nid, library_name)
+                #log_info(f"Importing Function: {function_name}") #debug
                 self.add_function_symbol(bv, function_stub_addr, function_name)
 
             # process imported variables, lookup by nid, add symbol
@@ -481,7 +479,7 @@ class VitaElf():
                 variable_nid = struct.unpack("<I", nid_data)[0]
                 variable_addr = struct.unpack("<I", entry_data)[0]
                 variable_name = self.lookup_nid_variable(library_nid, variable_nid, library_name)
-                log_info(f"importing var: {variable_name} - var addr: {variable_addr}") #TODO
+                #log_info(f"Importing Variable: {variable_name} - Var addr: {variable_addr}") #debug
                 self.add_data_symbol(bv, variable_addr, variable_name)
 
             imports_offset += size
@@ -532,7 +530,7 @@ class VitaElf():
 
         #Setting imports to void and tell binary ninja to resolve variables.
         #func_type = Type.function(Type.void(), [], variable_arguments=True)
-        
+
         if self.sdk_hdr and name in self.sdk_hdr.functions:
             func_param = self.sdk_hdr.functions[name].parameters
             func_ret = self.sdk_hdr.functions[name].return_value
@@ -565,7 +563,7 @@ class VitaElf():
             rem_func = self.bv.get_functions_containing(addr)
             self.bv.remove_function(rem_func[0])
         except:
-            log_info(f"No function to remove at addr: {hex(addr)}")
+            pass
         bv.define_data_var(addr, Type.int(4, sign=False))
 
     #There has to be a better pythonic way of doing this.
@@ -599,14 +597,14 @@ def sweep_before_load(bv):
     '''
     We cannot call bv.update_analysis_and_wait() on a UI thread.
     Until a more clever approach is realized, this will solve two issues:
-    1. Loading the plugin and injecting addresses during the initial linear sweep causes mis-alignment issues.
+    1. Loading the plugin and injecting addresses during the initial analysis/linsweep causes mis-alignment issues.
     2. There appears to be an issue with binaries using mixed arm & thumb instruction sets, the first Linear Sweep run does okay but misses many functions(typically on the order of a few thousand). The second run does better and the third will find and create all of them, with the caveat that some inline data will be interpreted as instructions, causing a few non-functions to be represented as mis-aligned functions.
     This function will run linear sweep in a new thread for a max of n times or until no new functions are created.
 '''
     def n_linearsweep():
         func_cnt = 0    #function count
         i = 0           #current sweep iteration
-        n_max = 5      #max linear sweep runs
+        n_max = 5       #max linear sweep runs, stabilizes on 3-4 typically
 
         while i < n_max:
             bv.update_analysis_and_wait()           #wait for default analysis
@@ -615,7 +613,7 @@ def sweep_before_load(bv):
 
             cur_func_cnt = len(list(bv.functions))  #get current function count
             if cur_func_cnt == func_cnt:
-                log_info(f"No new function created at i: {i}")
+                log_info(f"No new functions created at linearsweep: {i}")
                 break
 
             func_cnt = cur_func_cnt
@@ -629,15 +627,4 @@ def sweep_before_load(bv):
 
     #Run linear sweep analysis in new thread.
     threading.Thread(target=n_linearsweep).start()
-
-def register_plugin():
-    #register plugin after the ARMv7 BinaryView is loaded.
-
-    PluginCommand.register(
-        "VitaELF: Inject Symbols",
-        "Injects resolved NID symbols into the ARMv7 BinaryView.",
-        sweep_before_load
-    )
-
-register_plugin()
 
