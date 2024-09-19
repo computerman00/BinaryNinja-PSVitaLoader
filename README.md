@@ -25,6 +25,7 @@ The included NID database was obtained from the vitasdk [vita-headers](https://g
 ```
 
 Afterwards, the plugin will prompt for a header file, this is not necessary, however **highly recommended**. With the header file we are able to resolve every single imported functions argument count, argument name, argument type, and function type/return. If this is not used, imported functions default to void and `variable_arguments` is set on the `binaryninja.types.FunctionType` object.
+
 ![Selecting NID DB](/images/header-select.png)
 
 
@@ -65,6 +66,7 @@ Patching FPS limits:
 Searching for cross references on vBlank(vSync) related calls is usually a good start. In a lot of cases, the frame limit is introduced by setting a vblank interval greater than `1`. Typically this would be done with a value moved into `r0` just before `sceDisplayWaitVblankStartMulti` is called. This value(`vcount`) will typically be `1`, `2`, or `3`. This likely indicates the wait for the next vblank start, which will occur after the last scanline and before the next VSync interval. A `vcount` of `2` will wait for `2` vBlank intervals before a VSync, this effectively limits the framerate to half of the displays refresh rate(30fps). A `vcount` of `3` would be refresh-rate/3, effectively limiting to 20fps.
 
 Looking at the popular [nzportable](https://github.com/nzp-team/nzportable) homebrew game running at 60fps natively.
+
 ![nzp fps](/images/example2-fps.png)
 
 The variable here wasn't resolved, however looking at the data at that address, we see its just a `1`, this indicates the game is capped to the screens refresh rate(60Hz), as 1 vBlank interval will occur for every vSync interval. 
