@@ -1,4 +1,4 @@
-from binaryninja import BinaryView, StructureBuilder, Type, log_info
+from binaryninja import BinaryView, StructureBuilder, Type
 
 # Slightly hacky approach but works well for now. Maps PyStruct fmt string to Binary Ninja Types
 def get_bn_type_from_format(fmt):
@@ -8,7 +8,8 @@ def get_bn_type_from_format(fmt):
         '4s': Type.array(Type.char(), 4),
         '26s': Type.array(Type.char(), 26),
         'B': Type.char(),         # Unsigned char
-        'I': Type.int(4, False)   # Unsigned int
+        'I': Type.int(4, False),   # Unsigned int
+        'B*': Type.pointer(arch=None,type=Type.char(),width=4) # char*
     }
     return bn_struct_map.get(fmt, Type.void())
 
@@ -45,7 +46,7 @@ def create_struct(bv: BinaryView, bn_type: str, addr: int):
             rem_func = bv.get_functions_containing(addr)
             bv.remove_function(rem_func[0])
         except:
-            log_info("No function at SceLibEnt_prx2arm location")
+            pass
         scelibent_type = bv.get_type_by_name("SceLibEnt_prx2arm")
         bv.define_data_var(addr=addr,var_type=scelibent_type)
 
@@ -65,7 +66,7 @@ def create_struct(bv: BinaryView, bn_type: str, addr: int):
             rem_func = bv.get_functions_containing(addr)
             bv.remove_function(rem_func[0])
         except:
-            log_info("No function at SceLibStub_prx2arm location")
+            pass
         scelibstub_type = bv.get_type_by_name("SceLibStub_prx2arm")
         bv.define_data_var(addr=addr,var_type=scelibstub_type)
 
@@ -84,7 +85,7 @@ def create_struct(bv: BinaryView, bn_type: str, addr: int):
             rem_func = bv.get_functions_containing(addr)
             bv.remove_function(rem_func[0])
         except:
-            log_info("No function at SceLibStub_prx2arm_new location")
+            pass
         scelibstub_type = bv.get_type_by_name("SceLibStub_prx2arm_new")
         bv.define_data_var(addr=addr,var_type=scelibstub_type)
 
@@ -105,18 +106,18 @@ def create_struct(bv: BinaryView, bn_type: str, addr: int):
             rem_func = bv.get_functions_containing(addr)
             bv.remove_function(rem_func[0])
         except:
-            log_info("No function at SceModuleInfo_prx2arm location")
+            pass
         scemodinfo_type = bv.get_type_by_name("SceModuleInfo_prx2arm")
         bv.define_data_var(addr=addr,var_type=scemodinfo_type)
 
     #This one is a bit tricky as size varies between 0x20 on FW 0.895, 0x2C on FW 0.931.010, 0x30 on FW 0.945, 0x34 on FW 3.60. We take on the 0x30 default for the time being, tiny errors don't really matter here but TODO: Get size first.
     elif bn_type == "SceProcessParam":
-        struct_fmt = "I 4s I I I I I I I I I I"
+        struct_fmt = "I 4s I I B* I I I B* I I B*"
         struct_vars = [
-            "size", "magic", "version", "sdk_version", "*sceUserMainThreadName",
+            "size", "magic", "version", "sdk_version", "sceUserMainThreadName",
             "sceUserMainThreadPriority", "sceUserMainThreadStackSize", "sceUserMainThreadAttribute",
-            "*sceProcessName", "sce_process_preload_disabled", "sceUserMainThreadCpuAffinityMask",
-            "*sce_libcparam"#, "unk_0x30"
+            "sceProcessName", "sce_process_preload_disabled", "sceUserMainThreadCpuAffinityMask",
+            "sce_libcparam"#, "unk_0x30"
         ]
         sceprocparam_dt = make_bn_struct(struct_fmt, struct_vars)
         bv.define_user_type("SceProcessParam", Type.structure_type(sceprocparam_dt))
@@ -126,7 +127,7 @@ def create_struct(bv: BinaryView, bn_type: str, addr: int):
             rem_func = bv.get_functions_containing(addr)
             bv.remove_function(rem_func[0])
         except:
-            log_info("No function at SceProcessParam location")
+            pass
         sceprocparam_type = bv.get_type_by_name("SceProcessParam")
         bv.define_data_var(addr=addr,var_type=sceprocparam_type)
 

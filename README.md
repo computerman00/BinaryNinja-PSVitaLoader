@@ -5,15 +5,16 @@ PS Vita ELF/PRX2 loader plugin for Binary Ninja
 1. [Description](#description)
 2. [Plugin Usage](#plugin-usage)
 3. [Notes/Issues](#notesissues)
-4. [Use-case examples](#use-case-examples)
-5. [TODO](#todo)
-6. [Credits](#credits)
+4. [TODO](#todo)
+5. [Credits](#credits)
+6. [Use-case examples](#use-case-examples)
 7. [Legal](#legal)
 
 ### Description:
 A Binary Ninja Plugin for PRX2 PS Vita eboot.bin ELFs. 
 
 Dynamic linking of modules on the PS Vita [is performed](https://wiki.henkaku.xyz/vita/NID#Usage) by NID(**N**umeric **Id**entifier) of a function or variable instead of names. The primary purpose of this plugin is to resolve all import/export function/variable names, create symbols for them, and load them back into the default ELF BinaryView at their respective position. This plugin will also add PS Vita(PRX2) specific datatypes with locations in the binary resolved(if applicable). Additionally, this plugin attempts to do some cleanup resulting from the decompilation of the mixed ARMv7/thumb2 instruction sets, removing some misaligned/junk instructions in places where there should have been in-line data. 
+
 
 ### Plugin Usage:
 Loading the plugin will prompt for a NID database yaml file
@@ -28,7 +29,6 @@ Afterwards, the plugin will prompt for a header file, this is not necessary, how
 
 ![Selecting NID DB](/images/header-select.png)
 
-
 The header file included is a compilation of all header files from [vitasdk/vita-headers](https://github.com/vitasdk/vita-headers/), all credit for the headers and NID DB goes to the vitasdk team. This header file was generated using the vitasdk toolchain([LICENSE](https://github.com/vitasdk/vita-headers/blob/master/LICENSE.md) added after) like so:
 ```
 └─$ /usr/local/vitasdk/bin/arm-vita-eabi-gcc -P -E $VITASDK/arm-vita-eabi/include/vitasdk.h -D"__attribute__(x)=" -D"__extension__(x)=" -Drestrict= -D__restrict__= > vita_headers.hpp
@@ -37,7 +37,8 @@ The header file included is a compilation of all header files from [vitasdk/vita
 The plugin will first run linear sweep analysis until no new functions are created. Symbols with their respective function names are then resolved almost instantly and injected/added into the default ELF BinaryView. 
 
 
-At this point, any sce* function call should be resolved by name, this is incredibly useful for finding specific function calls and getting a better overall understanding of the binary for reverse engineering.
+At this point, any sce* function call should be resolved and a few datatypes will be added. If the header file was supplied, all datatypes will be imported along with the sce* functions proper return type, argument names, and argument types. 
+![Plugin Sample](/images/plugin-sample.png)
 
 
 ### Notes/Issues:
@@ -53,6 +54,23 @@ A painful but much better solution to thumb2 start: After ensuring the very firs
 ... 		bv.remove_function(func)
 ```
 After all non-thumb2 functions are removed, either (re)load the Vita Loader plugin(recommended) or run a few linear sweeps, this will correctly identify instruction set switches and give you a clean binary view(for the most part). If anyone knows how to resolve this globally, please do share - I have tried forcing the platform but because the binary is technically `armv7` the platform switches back to `linux-armv7`.
+
+
+### TODO:
+- Split functions and utility across multiple imports to maintain readability.
+- Move examples to wiki
+- Extend support to `scelibstub_psp`, `scelibent_psp` and other PRX1 primitives to support the OG PSP.
+- Extend to full custom BinaryView plugin with support for relocations
+- ~~Potentially extending un-implenented instructions commonly used within Vita/PRX2 elfs(Such as: vcvt, vdiv, vmov, vmrs and other fp related instructions)~~ - The binaryninja team is [already hard at work on these](https://github.com/Vector35/binaryninja-api/commits/dev/arch/armv7).
+
+
+### Credits:
+
+- The HENkaku [Vita Development Wiki](https://wiki.henkaku.xyz/vita/Main_Page) and specifically the [PRX page](https://wiki.henkaku.xyz/vita/PRX) for the detailed breakdown of the `SceModuleInfo` structure and its location within the ELF. Also for the breakdown of the `scelibent_prx2arm` and `scelibstub_prx2arm` function export/import structures.
+
+- VitaSDK for the [NID db](https://github.com/vitasdk/vita-headers/tree/master/db) and all [header files](https://github.com/vitasdk/vita-headers/tree/master/include)(Also the wonderful vita [toolchain](https://github.com/vitasdk/vdpm) and module [documentation](https://docs.vitasdk.org/modules.html))
+
+- The [VitaLoader Redux](https://github.com/CreepNT/VitaLoaderRedux) project, a Vita loader plugin for Ghidra with way more than just symbol mapping support - although not a Ghidra or Java fan, I studied portions of the project and its amazingly clarifying inline comments when stuck. 
 
 
 ### Use-case examples:
@@ -85,7 +103,7 @@ This is much simpler and typically you'd want to load up the binary on a PS Vita
 
 Another potential method to patch resolution is to cross reference the `sceDisplaySetFrameBuf` symbol and figure out where the framebuffer is updated/set, this takes in a pointer to the `SceDisplayFrameBuf` struct which contains the framebuffer width and height. These values are sometimes set just before the function call. According to the [vitasdk documentation](https://docs.vitasdk.org/group__SceDisplayKernel.html#structSceDisplayFrameBuf) the following resolutions can be set: `480x272`, `640x368`, `720x408`, `960x544`. 
 
-To show an example of this and practice our reverse engineering, we use the vitasdk to compile a homebrew app with a resolution of 640(`0x280`) x 368(`0x170`).
+To show an example of this and practice our reverse engineering, we use the vitasdk toolchain to compile a homebrew app with a resolution of 640(`0x280`) x 368(`0x170`).
 
 
 Searching for `0x280`, there is only one with `0x170` next to it, making it the obvious choice:
@@ -115,24 +133,6 @@ We could use this information to patch the binary by changing the values in the 
 0:0x3d036 t2_mov(1, 1, fb_w)
 0:0x3d03c t2_mov(1, 2, fb_h)
 ```
-
-
-
-### TODO:
-- Split functions and utility across multiple imports to maintain readability.
-- Move examples to wiki
-- Extend support to `scelibstub_psp`, `scelibent_psp` and other PRX1 primitives to support the OG PSP.
-- Extend to full custom BinaryView plugin with support for relocations
-- ~~Potentially extending un-implenented instructions commonly used within Vita/PRX2 elfs(Such as: vcvt, vdiv, vmov, vmrs and other fp related instructions)~~ - The binaryninja team is [already hard at work on these](https://github.com/Vector35/binaryninja-api/commits/dev/arch/armv7).
-
-
-### Credits:
-
-- The HENkaku [Vita Development Wiki](https://wiki.henkaku.xyz/vita/Main_Page) and specifically the [PRX page](https://wiki.henkaku.xyz/vita/PRX) for the detailed breakdown of the `SceModuleInfo` structure and its location within the ELF. Also for the breakdown of the `scelibent_prx2arm` and `scelibstub_prx2arm` function export/import structures.
-
-- VitaSDK for the [NID db](https://github.com/vitasdk/vita-headers/tree/master/db) and all [header files](https://github.com/vitasdk/vita-headers/tree/master/include)(Also the wonderful vita [toolchain](https://github.com/vitasdk/vdpm) and module [documentation](https://docs.vitasdk.org/modules.html))
-
-- The [VitaLoader Redux](https://github.com/CreepNT/VitaLoaderRedux) project, a Vita loader plugin for Ghidra with way more than just symbol mapping support - although not a Ghidra or Java fan, I studied portions of the project and its amazingly clarifying inline comments when stuck. 
 
 
 ### Legal
