@@ -12,7 +12,6 @@ from binaryninja import (
 import threading
 import struct
 import yaml
-import os
 from .structs import create_struct
 
 class VitaElf():
