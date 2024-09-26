@@ -17,6 +17,17 @@ Dynamic linking of modules on the PS Vita [is performed](https://wiki.henkaku.xy
 
 
 ### Plugin Usage:
+
+Installation:
+- This plugin is available in the [community-plugins](https://github.com/Vector35/community-plugins) - Download directly from the Binary Ninja Plugin Manager.
+
+OR Manual Install:
+- Place/Clone the plugin dir/repository into the users plugin folder.
+	- Linux: `~/.binaryninja/plugins/`
+	- Windows: `%APPDATA%\Binary Ninja\plugins\`
+	- Darwin: `~/Library/Application Support/Binary Ninja/plugins/`
+
+
 Loading the plugin will prompt for a NID database yaml file
 ![Selecting NID DB](/images/nid-db-select.png)
 
@@ -42,7 +53,7 @@ At this point, any sce* function call should be resolved and a few datatypes wil
 
 
 ### Notes/Issues:
-- Tested to be working on Binary Ninja `4.1.5902-Stable` and `4.2.6075-dev`
+- Tested to be working on Binary Ninja `4.1.5902-Stable`, `4.2.6075-dev` and `4.2.6092-dev`
 - Binary Ninja appears to trip in ARMv7/thumb2 mixed instruction sets binaries. An issue was encountered where if the binary is detected as ARMv7(All were while testing) and the first instruction is a Thumb2 instruction, it will mangle the entire dis-assembled binary. To fix this, right click initial function/instruction->Make Function at This Address->thumb2->linux-thumb2. Next run Linear Sweep again, this will fix the binary and later instruction set switches(typically `blx`) are sometimes accounted for properly.
 
 A painful but much better solution to thumb2 start: After ensuring the very first function(@base_addr) is set to thumb2 manually, I have had great luck doing the following in the BN console:
@@ -53,15 +64,17 @@ A painful but much better solution to thumb2 start: After ensuring the very firs
 ... 	if func.arch != thumb2:
 ... 		bv.remove_function(func)
 ```
-After all non-thumb2 functions are removed, either (re)load the Vita Loader plugin(recommended) or run a few linear sweeps, this will correctly identify instruction set switches and give you a clean binary view(for the most part). If anyone knows how to resolve this globally, please do share - I have tried forcing the platform but because the binary is technically `armv7` the platform switches back to `linux-armv7`.
+After all non-thumb2 functions are removed, either (re)load the Vita Loader plugin(recommended) or run a few linear sweeps, this will correctly identify instruction set switches and give you a clean binary view(for the most part). If anyone knows how to resolve this globally, please do share. A optional UI feature will be considered to do this once a more clever approach is realized.
 
 
 ### TODO:
+- Iterate and test across older versions of BN to ensure compatibility for a wider range of users.
 - Split functions and utility across multiple imports to maintain readability.
 - Move examples to wiki
-- Extend support to `scelibstub_psp`, `scelibent_psp` and other PRX1 primitives to support the OG PSP.
 - Extend to full custom BinaryView plugin with support for relocations
-- ~~Potentially extending un-implenented instructions commonly used within Vita/PRX2 elfs(Such as: vcvt, vdiv, vmov, vmrs and other fp related instructions)~~ - The binaryninja team is [already hard at work on these](https://github.com/Vector35/binaryninja-api/commits/dev/arch/armv7).
+- Add optional, more-aggressive cleaning options, ideally through UI. Probably best to switch to a full seperate BinaryView before implementing this.
+- Extend support to `scelibstub_psp`, `scelibent_psp` and other PRX1 primitives to support the OG PSP.
+- ~~Potentially extending un-implenented instructions commonly used within Vita/PRX2 elfs(Such as: vcvt, vdiv, vmov, vmrs and other fp related instructions)~~ - The binaryninja team is [already hard at work on these](https://github.com/Vector35/binaryninja-api/commits/dev/arch/armv7). Build the armv7 plugin (or use dev build) for a better view.
 
 
 ### Credits:
