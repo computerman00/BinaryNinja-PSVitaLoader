@@ -2,6 +2,7 @@ from binaryninja import (
     PluginCommand,
     log_error,
     log_info,
+    Architecture,
     BinaryView,
     Symbol,
     SymbolType,
@@ -41,6 +42,12 @@ class VitaElf():
             self.process_imports(self.bv)
             self.bv.add_entry_point(self.module_start_addr)
             self.clean_data_segs()
+
+            # Add persistant(.bndb) faux symbol to be used for pc.register is_valid.
+            # This prevents running additional optional features until main plugin completes.
+            symbol = Symbol(SymbolType.DataSymbol, 0, "VitaELF_Injected")
+            self.bv.define_user_symbol(symbol)
+
             log_info("Symbols added successfully.")
 
         except Exception as e:
@@ -151,14 +158,14 @@ class VitaElf():
             self.attributes,    # short modattribute
             self.version,       # char modversion[2]
             modname,            # char modname[26]
-            self.type,          # char terminal
-            self.gp_value,      # char infoversion
+            self.terminal,      # char terminal
+            self.infoversion,   # char infoversion
             self.resreve,       # Elf32_Addr resreve
             self.export_top,    # Elf32_Addr ent_top
             self.export_end,    # Elf32_Addr ent_end
             self.import_top,    # Elf32_Addr stub_top
             self.import_end,    # Elf32_Addr stub_end
-            self.module_nid,    # Elf32_Word dbg_fingerprint
+            self.dbg_fp,        # Elf32_Word dbg_fingerprint
             self.tls_start,     # Elf32_Addr tls_top
             self.tls_filesz,    # Elf32_Addr tls_filesz
             self.tls_memsz,     # Elf32_Addr tls_memsz
@@ -202,10 +209,10 @@ class VitaElf():
                         if mod_info_offset >= 0:
                             return mod_info_offset
         '''
-        #For ET_SCE_RELEXEC and ET_SCE_ARMRELEXEC (AND FOR ET_SCE_EXEC in all test binaries)
+        # For ET_SCE_RELEXEC and ET_SCE_ARMRELEXEC (AND FOR ET_SCE_EXEC in all test binaries)
         if self.e_type in [ET_SCE_RELEXEC, ET_SCE_ARMRELEXEC, ET_SCE_EXEC]: #Some ET_SCE_EXEC
-            #ET_SCE_EXEC: in text segment (first LOAD seg) at offset Elf32_Phdr[text_seg_id].p_paddr - Elf32_Phdr[text_seg_id].p_offset
-            #ET_SCE_RELEXEC: SceModuleInfo struct is in segment indexed by the upper two bits of e_entry
+            # ET_SCE_EXEC: in text segment (first LOAD seg) at offset Elf32_Phdr[text_seg_id].p_paddr - Elf32_Phdr[text_seg_id].p_offset
+            # ET_SCE_RELEXEC: SceModuleInfo struct is in segment indexed by the upper two bits of e_entry
             seg_idx = (self.e_entry >> 30) & 0x3
             #Offset within segment
             seg_offset = self.e_entry & 0x3FFFFFFF
@@ -222,12 +229,12 @@ class VitaElf():
         """
         Promts the user for a YAML NID DB and loads the NID database from file.
         """
-        #prompt for yml file
+        # prompt for yml file
         nid_db_path = get_open_filename_input("Select NID database YAML file")
         if not nid_db_path:
             raise Exception("NID database YAML file is required")
 
-        #load db in nid_database class var
+        # load db in nid_database class var
         try:
             with open(nid_db_path, "r") as f:
                 self.nid_database = yaml.safe_load(f)
@@ -255,9 +262,6 @@ class VitaElf():
             #Add types while we are here to avoid another header check
             for name, tobj in self.sdk_hdr.types.items():
 	            self.bv.define_user_type(name, tobj)
-
-
-
 
 
     def process_exports(self, bv: BinaryView):
@@ -350,6 +354,10 @@ class VitaElf():
                 if library_name == "NONAME":
                     if variable_nid == 0x6C2224BA:
                         variable_name = "module_info"
+                        # Define user symbol for SCEMODINFO_ADDR, used for optional cleaning feature.
+                        self.scemodinfo_addr = variable_addr
+                        symbol = Symbol(SymbolType.DataSymbol, self.scemodinfo_addr, "SCEMODINFO_ADDR")
+                        self.bv.define_user_symbol(symbol)
                         create_struct(self.bv, "SceModuleInfo_prx2arm", variable_addr)
                     elif variable_nid == 0x70FBA1E7:
                         variable_name = "module_proc_param"
@@ -489,7 +497,7 @@ class VitaElf():
         """
         Lookup function name in the NID DB using library and function NIDs.
         """
-        #TODO: Figure out more efficient way, nested nightmare
+        # TODO: Figure out more efficient way, nested nightmare
         if self.nid_database and "modules" in self.nid_database:
             for module_name, module in self.nid_database["modules"].items():
                 if "libraries" in module:
@@ -499,14 +507,14 @@ class VitaElf():
                             for func_name, nid in functions.items():
                                 if nid == function_nid:
                                     return func_name
-        #give default name if not found
+        # give default name if not found
         return f"{library_name}_{function_nid:08X}"
 
     def lookup_nid_variable(self, library_nid, variable_nid, library_name):
         """
         Lookup variable name in the NID DB using library and function NIDs.
         """
-        #TODO: Figure out more efficient way, nested nightmare
+        # TODO: Figure out more efficient way, nested nightmare
         if self.nid_database and "modules" in self.nid_database:
             for module_name, module in self.nid_database["modules"].items():
                 if "libraries" in module:
@@ -521,32 +529,30 @@ class VitaElf():
 
     def add_function_symbol(self, bv: BinaryView, addr: int, name: str):
         """
-        Create a void function at given addr with a variable number of arguments(To let BN try to determine args). Create a function symbol at addr with given name and add/define the imported function into the default ELF BinaryView.
+        Create a function at given addr with a variable number of arguments(To let BN try to determine args). Create a function symbol at addr with given name and add/define the imported function into the default ELF BinaryView.
         """
         if not bv.get_function_at(addr):
             bv.create_user_function(addr)
 
-
-        #Setting imports to void and tell binary ninja to resolve variables.
-        #func_type = Type.function(Type.void(), [], variable_arguments=True)
 
         if self.sdk_hdr and name in self.sdk_hdr.functions:
             func_param = self.sdk_hdr.functions[name].parameters
             func_ret = self.sdk_hdr.functions[name].return_value
             func_type = Type.function(func_ret, func_param, variable_arguments=False)
         else:
+            # If no header or func not in header, set to void and tell BN to resolve variables.
             func_type = Type.function(Type.void(), [], variable_arguments=True)
-        #func_type = Type.function(None, None, variable_arguments=True)
 
-        #Get the function pointer
+
+        # Get the function pointer
         func = bv.get_function_at(addr)
 
-        #set type to void with variables
+        # Set type to void with variables
         func.type = func_type
 
         symbol = Symbol(SymbolType.ImportedFunctionSymbol, addr, name)
 
-        #define as import, will need to add check for export but it appears to just be a color coding thing for our purposes.
+        # Define as import, will need to add check for export but it appears to just be a color coding thing for our purposes.
         bv.define_imported_function(symbol, func)
 
     def add_data_symbol(self, bv: BinaryView, addr: int, name: str):
@@ -565,8 +571,8 @@ class VitaElf():
             pass
         bv.define_data_var(addr, Type.int(4, sign=False))
 
-    #There has to be a better pythonic way of doing this.
-    #Technically would be faster to read into overkill sized buffer and split at b"\x00".
+    # There has to be a better pythonic way of doing this.
+    # Technically would be faster to read into overkill sized buffer and split at b"\x00".
     def read_string_at(self, bv: BinaryView, addr: int):
         """
         Reads a C(null-terminated) string from the given addr.
@@ -590,7 +596,44 @@ class VitaElf():
         for func in funcs:
             if func.start > end_imports:
                 self.bv.remove_function(func)
+        log_info(f"Consider running `Plugins->PSVitaLoader->Additional Cleaning` for better results.\nIf SceModuleInfo({hex(self.scemodinfo_addr)}) was overwritten, you SHOULD run Additional Cleaning.")
 
+    def attempt_clean(self):
+        '''
+        Additional experimental cleaning, this tends to correct for:
+        - Aggressive number of linear sweeps overwriting data segments.
+        - Missing functions or bad instructions(Typically when a function containing blx is not caught and BN attempts to analyze 4B Thumb2 instructions as 2-2Byte ArmV7 instructions and vice-versa).
+        '''
+        def run_linear_sweep():
+            self.bv.add_analysis_option("linearsweep")
+            self.bv.update_analysis_and_wait()
+            execute_on_main_thread(post_lin_sweep)
+
+        def post_lin_sweep():
+            scemodinfo_addr = self.bv.get_symbol_by_raw_name("SCEMODINFO_ADDR").address
+            for func in self.bv.functions:
+                for addr_range in func.address_ranges:
+                    if addr_range.end > scemodinfo_addr:
+                        self.bv.remove_function(func)
+                        break
+            log_info("Additional cleaning complete.")
+
+        for func in self.bv.functions:
+	        if func.arch != Architecture['thumb2']:
+		        self.bv.remove_function(func)
+        threading.Thread(target=run_linear_sweep).start()
+
+
+def attempt_additional_cleaning(bv):
+    """
+    See: attempt_clean
+    """
+    try:
+        vita = VitaElf(bv)
+        vita.attempt_clean()
+        log_info("Cleaning completed successfully.")
+    except Exception as e:
+        log_error(f"Error during cleaning: {e}")
 
 def sweep_before_load(bv):
     '''
